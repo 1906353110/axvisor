@@ -7,7 +7,7 @@ use arceos::modules::{axalloc, axhal};
 use axaddrspace::{HostPhysAddr, HostVirtAddr};
 use axvcpu::AxVCpuHal;
 use axvm::{AxVMHal, AxVMPerCpu};
-
+use std::os::arceos::modules::axhal::mem::{phys_to_virt, virt_to_phys};
 use crate::vmm;
 
 /// Implementation for `AxVMHal` trait.
@@ -78,6 +78,18 @@ impl AxVCpuHal for AxVCpuHalImpl {
         debug!("IRQ handler {irq_num}");
         axhal::irq::handler_irq(irq_num);
     }
+
+    fn alloc_contiguous_frames(count: usize) -> Option<HostPhysAddr> {
+           axalloc::global_allocator()
+                .alloc_pages(count, PAGE_SIZE_4K)
+                .map(|vaddr| virt_to_phys(vaddr.into()))
+                .ok()
+    }
+
+    fn dealloc_contiguous_frames(paddr: HostPhysAddr, count: usize) {
+        axalloc::global_allocator().dealloc_pages(phys_to_virt(paddr).as_usize(), count)
+    }
+
 }
 
 #[percpu::def_percpu]
@@ -96,6 +108,7 @@ pub(crate) fn enable_virtualization() {
 
     static CORES: AtomicUsize = AtomicUsize::new(0);
 
+
     for cpu_id in 0..config::SMP {
         thread::spawn(move || {
             // Initialize cpu affinity here.
@@ -105,7 +118,7 @@ pub(crate) fn enable_virtualization() {
             );
 
             vmm::init_timer_percpu();
-
+            info!("after vmm");
             let percpu = unsafe { AXVM_PER_CPU.current_ref_mut_raw() };
             percpu
                 .init(this_cpu_id())

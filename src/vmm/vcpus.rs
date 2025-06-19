@@ -293,9 +293,8 @@ fn vcpu_run() {
                 AxVCpuExitReason::Hypercall { nr, args } => {
                     debug!("Hypercall [{}] args {:x?}", nr, args);
                 }
-                AxVCpuExitReason::FailEntry {
-                    hardware_entry_failure_reason,
-                } => {
+                AxVCpuExitReason::FailEntry { hardware_entry_failure_reason, } =>
+                    {
                     warn!(
                         "VM[{}] VCpu[{}] run failed with exit code {}",
                         vm_id, vcpu_id, hardware_entry_failure_reason

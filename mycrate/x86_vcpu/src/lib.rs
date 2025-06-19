@@ -15,39 +15,37 @@ pub(crate) mod regs;
 mod ept;
 mod frame;
 
-// cfg_if::cfg_if! {
-//     if #[cfg(feature = "vmx")] {
+cfg_if::cfg_if! {
+    if #[cfg(feature = "vmx")] {
+        mod vmx;
+        use vmx as vender;
+        pub use vmx::{VmxExitInfo, VmxExitReason, VmxInterruptInfo, VmxIoExitInfo};
+        pub use vender::VmxArchVCpu;
+        pub use vender::VmxArchPerCpuState;
+    }else if #[cfg(feature = "svm")] {
+        mod svm;
+        use svm as vender;
+        pub use vender::{
+            SvmArchVCpu,SvmArchPerCpuState,
+        };
+    }
+}
+
+//
 //         mod vmx;
 //         use vmx as vender;
 //         pub use vmx::{VmxExitInfo, VmxExitReason, VmxInterruptInfo, VmxIoExitInfo};
 //
 //         pub use vender::VmxArchVCpu;
 //         pub use vender::VmxArchPerCpuState;
-//     }else if #[cfg(feature = "svm")] {
-//         mod svm;
-//         use svm as vender;
-//         pub use vender::{
-//             SvmExitInfo, SvmInterceptCode, SvmArchVCpu,
-//             SvmArchPerCpuState,
-//         };
-//     }
-// }
-
-
-        mod vmx;
-        use vmx as vender;
-        pub use vmx::{VmxExitInfo, VmxExitReason, VmxInterruptInfo, VmxIoExitInfo};
-
-        pub use vender::VmxArchVCpu;
-        pub use vender::VmxArchPerCpuState;
-
-
-mod svm;
-use svm as vendor;
-pub use vendor::{
-    SvmExitInfo, SvmInterceptCode, SvmArchVCpu,
-    SvmArchPerCpuState,
-};
+//
+//
+// mod svm;
+// use svm as vendor;
+// pub use vendor::{
+//     SvmArchVCpu,
+//     SvmArchPerCpuState,
+// };
 
 pub use ept::GuestPageWalkInfo;
 pub use regs::GeneralRegisters;

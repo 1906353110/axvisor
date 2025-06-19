@@ -51,4 +51,9 @@ pub trait AxVCpuHal {
     fn irq_hanlder() {
         unimplemented!("irq_handler is not implemented");
     }
+
+    /// Allocates more frames and returns its host physical address.
+    fn alloc_contiguous_frames(count: usize) -> Option<HostPhysAddr>;
+    fn dealloc_contiguous_frames(paddr: HostPhysAddr, count: usize);
+
 }

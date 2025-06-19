@@ -9,9 +9,6 @@
 //!  2. Allocate Host-Save Area (HSAVE) and write its physical address to `MSR_VM_HSAVE_PA`
 //!  3. Set `EFER.SVME` (bit 12) to enable SVM mode
 //!  4. Clearing `EFER.SVME` disables SVM (no need for VMXON/VMXOFF equivalents)
-//!
-//! Note: SVM does not require `revision_id` or `shadow-indicator` as in VMX.
-//!       HSAVE must be 4 KiB aligned, but its content can be zeroed.
 
 use axerrno::{ax_err, ax_err_type, AxResult};
 use axvcpu::{AxArchPerCpu, AxVCpuHal};

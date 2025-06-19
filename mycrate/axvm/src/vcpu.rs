@@ -2,7 +2,7 @@
 
 cfg_if::cfg_if! {
     if #[cfg(all(target_arch = "x86_64", feature = "svm"))] {
-        // pub use x86_vcpu::SvmArchVCpu as AxArchVCpuImpl;
+        pub use x86_vcpu::SvmArchVCpu as AxArchVCpuImpl;
         pub use x86_vcpu::SvmArchPerCpuState as AxVMArchPerCpuImpl;
         pub use x86_vcpu::has_hardware_support;
         pub type AxVCpuCreateConfig = ();

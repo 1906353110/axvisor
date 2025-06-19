@@ -33,11 +33,12 @@ axstd = { git = "https://github.com/arceos-hypervisor/arceos.git", branch = "vmm
 ]}
 
 # System dependent modules provided by ArceOS-Hypervisor.
-axvm = { git = "https://github.com/arceos-hypervisor/axvm.git" }
+axvm = { git = "https://github.com/arceos-hypervisor/axvm.git",default-features = false}
 axvcpu = { git = "https://github.com/arceos-hypervisor/axvcpu.git" }
+
 axaddrspace = { git = "https://github.com/arceos-hypervisor/axaddrspace.git" }
 
-# System independent crates provided by ArceOS, these crates could be imported by remote url. 
+# System independent crates provided by ArceOS, these crates could be imported by remote url.
 crate_interface = "0.1"
 axerrno = "0.1.0"
 memory_addr = "0.3"
@@ -51,3 +52,12 @@ axconfig = { git = "https://github.com/arceos-hypervisor/arceos.git", branch = "
 prettyplease = "0.2"
 quote = "1.0"
 syn = "2.0"
+
+[patch."https://github.com/arceos-hypervisor/x86_vcpu.git"]
+x86_vcpu = { path = "mycrate/x86_vcpu"}
+
+[patch."https://github.com/arceos-hypervisor/axvm.git"]
+axvm = { path = "mycrate/axvm" }
+
+[patch."https://github.com/arceos-hypervisor/axvcpu.git"]
+axvcpu = { path = "mycrate/axvcpu" }

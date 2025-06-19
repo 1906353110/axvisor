@@ -2,38 +2,13 @@
 //! https://www.amd.com/content/dam/amd/en/documents/processor-tech-docs/programmer-references/24593.pdf
 
 #![allow(dead_code)]
-#![allow(clippy::upper_case_acronyms)]
 
 use axaddrspace::HostPhysAddr;
-use axerrno::{AxResult, ax_err};
+use axerrno::{AxResult};
 use axvcpu::AxVCpuHal;
-use bit_field::BitField;
 use memory_addr::PAGE_SIZE_4K as PAGE_SIZE;
+use crate::frame::{ContiguousPhysFrames, PhysFrame};
 
-use crate::frame::PhysFrame;
-use crate::msr::Msr;
-
-/// SVM Host-Save Area (HSAVE)
-/// CPU saves a few host registers here on every VM-EXIT.
-#[derive(Debug)]
-pub struct HSaveArea<H: AxVCpuHal> {
-    page: PhysFrame<H>,
-}
-
-impl<H: AxVCpuHal> HSaveArea<H> {
-    pub const unsafe fn uninit() -> Self {
-        Self { page: unsafe { PhysFrame::uninit() } }
-    }
-    pub fn new() -> AxResult<Self> {
-        Ok(Self { page: PhysFrame::alloc_zero()? })
-    }
-
-    /// Physical address to be written to MSR_VM_HSAVE_PA
-    #[inline(always)]
-    pub fn phys_addr(&self) -> HostPhysAddr {
-        self.page.start_paddr()
-    }
-}
 
 /// Virtual-Machine Control Block (VMCB)
 /// One 4 KiB page per vCPU: [control-area | save-area].
@@ -47,106 +22,136 @@ impl<H: AxVCpuHal> VmcbFrame<H> {
         Self { page: unsafe { PhysFrame::uninit() } }
     }
 
-    /// Allocate a zero-filled VMCB frame.
     pub fn new() -> AxResult<Self> {
         Ok(Self { page: PhysFrame::alloc_zero()? })
     }
 
-    /// Guest-visible physical address (GPPA) for VMRUN.
-    #[inline(always)]
-    pub fn phys_addr(&self) -> u64 {
-        self.page.start_paddr().as_u64()
+    pub fn phys_addr(&self) -> HostPhysAddr {
+        self.page.start_paddr()
     }
 }
+
 
 // (AMD64 APM Vol.2, Section 15.10)
 // The I/O Permissions Map (IOPM) occupies 12 Kbytes of contiguous physical memory.
 // The map is structured as a linear array of 64K+3 bits (two 4-Kbyte pages, and the first three bits of a third 4-Kbyte page) and must be aligned on a 4-Kbyte boundary;
 #[derive(Debug)]
-pub struct IOPM<H: AxVCpuHal> {
-    frame: PhysFrame<H>,              // 8 KiB, but we allocate full 8 KiB page(s)
+pub struct IOPm<H: AxVCpuHal> {
+    frames: ContiguousPhysFrames<H>,  // 3 contiguous frames (12KB)
 }
 
-impl<H: AxVCpuHal> IOPM<H> {
-    /// All ports **pass-through** (bit = 0).
+impl<H: AxVCpuHal> IOPm<H> {
     pub fn passthrough_all() -> AxResult<Self> {
-        Ok(Self { frame: PhysFrame::alloc_zero_size(8192)? })
+        let mut frames = ContiguousPhysFrames::<H>::alloc_zero(3)?;
+
+        // Set first 3 bits of third frame to intercept (ports > 0xFFFF)
+        let third_frame_start = frames.as_mut_ptr() as usize + 2 * PAGE_SIZE;
+        unsafe {
+            let third_byte = third_frame_start as *mut u8;
+            *third_byte |= 0x07; // Set bits 0-2 (0b00000111)
+        }
+
+        Ok(Self { frames })
     }
 
-    /// All ports **intercept** (bit = 1).
+    #[allow(unused)]
     pub fn intercept_all() -> AxResult<Self> {
-        let mut frame = PhysFrame::alloc_size(8192)?;
-        frame.fill(u8::MAX);
-        Ok(Self { frame })
+        let mut frames = ContiguousPhysFrames::<H>::alloc(3)?;
+        frames.fill(0xFF); // Set all bits to 1 (intercept)
+        Ok(Self { frames })
     }
 
-    #[inline(always)]
-    pub fn phys_addr(&self) -> u64 {
-        self.frame.start_paddr().as_u64()
+    pub fn phys_addr(&self) -> HostPhysAddr {
+        self.frames.start_paddr()
     }
 
-    /// Change permission of one port (APM §15.24.1).
-    /// `intercept = true` ⇒ VMM intercepts.
-    pub fn set_port(&mut self, port: u16, intercept: bool) {
-        let byte  = (port / 8) as usize;
-        let bit   = (port % 8) as u8;
-        let map   = unsafe {
-            core::slice::from_raw_parts_mut(self.frame.as_mut_ptr(), 8192)
-        };
-        if intercept {
-            map[byte] |= 1 << bit;
-        } else {
-            map[byte] &= !(1 << bit);
+    pub fn set_intercept(&mut self, port: u32, intercept: bool) {
+        let byte_index = port as usize / 8;
+        let bit_offset = (port % 8) as u8;
+        let iopm_ptr = self.frames.as_mut_ptr();
+
+        unsafe {
+            let byte_ptr = iopm_ptr.add(byte_index);
+            if intercept {
+                *byte_ptr |= 1 << bit_offset;
+            } else {
+                *byte_ptr &= !(1 << bit_offset);
+            }
         }
     }
-}
 
-/// 15.25  *MSR Permission Map (MSRPM)* – 3 × 2 KiB = 6 KiB
-/// Indexing rules: see table 15-37.
+    pub fn set_intercept_of_range(&mut self, port_base: u32, count: u32, intercept: bool) {
+        for port in port_base..port_base + count {
+            self.set_intercept(port, intercept)
+        }
+    }
+
+}
+// (AMD64 APM Vol.2, Section 15.10)
+// The VMM can intercept RDMSR and WRMSR instructions by means of the SVM MSR permissions map (MSRPM) on a per-MSR basis
+// The four separate bit vectors must be packed together and located in two contiguous physical pages of memory.
 #[derive(Debug)]
-pub struct MSRPM<H: AxVCpuHal> {
-    frame: PhysFrame<H>,              // 6 KiB
+pub struct MSRPm<H: AxVCpuHal> {
+    frames: ContiguousPhysFrames<H>,
 }
 
-impl<H: AxVCpuHal> MSRPM<H> {
+impl<H: AxVCpuHal> MSRPm<H> {
     pub fn passthrough_all() -> AxResult<Self> {
-        Ok(Self { frame: PhysFrame::alloc_zero_size(6144)? })
+        Ok(Self {
+            frames: ContiguousPhysFrames::alloc_zero(2)?,
+        })
     }
 
+    #[allow(unused)]
     pub fn intercept_all() -> AxResult<Self> {
-        let mut frame = PhysFrame::alloc_size(6144)?;
-        frame.fill(u8::MAX);
-        Ok(Self { frame })
+        let mut frames = ContiguousPhysFrames::alloc(2)?;
+        frames.fill(0xFF);
+        Ok(Self { frames })
     }
 
-    #[inline(always)]
-    pub fn phys_addr(&self) -> u64 {
-        self.frame.start_paddr().as_u64()
+    pub fn phys_addr(&self) -> HostPhysAddr {
+        self.frames.start_paddr()
     }
 
-    /// Helper: convert MSR ➜ (byte, bit) inside MSRPM (APM §15.25.1).
-    fn msr_slot(msr: u32, write: bool) -> (usize, u8) {
-        let (base, idx) = match msr {
-            0x0000_0000..=0x0000_1FFF => (0, msr),
-            0xC000_0000..=0xC000_1FFF => (2048, msr - 0xC000_0000),
-            0xC001_0000..=0xC001_1FFF => (4096, msr - 0xC001_0000),
-            _ => panic!("MSR {:#x} not interceptable by MSRPM", msr),
-        };
-        let bit  = (idx & 0x7) as u8;
-        let byte = (idx / 8) as usize + base + if write { 0 } else { 1024 };
-        (byte, bit)
-    }
-
-    /// `write = false` → read-intercept; `true` → write-intercept.
-    pub fn set_msr(&mut self, msr: u32, write: bool, intercept: bool) {
-        let (byte, bit) = Self::msr_slot(msr, write);
-        let map = unsafe {
-            core::slice::from_raw_parts_mut(self.frame.as_mut_ptr(), 6144)
-        };
-        if intercept {
-            map[byte] |= 1 << bit;
+    pub fn set_intercept(&mut self, msr: u32, is_write: bool, intercept: bool) {
+        let (segment, msr_low) = if msr <= 0x1fff {
+            (0u32, msr)
+        } else if (0xc000_0000..=0xc000_1fff).contains(&msr) {
+            (1u32, msr & 0x1fff)
+        } else if (0xc001_0000..=0xc001_1fff).contains(&msr) {
+            (2u32, msr & 0x1fff)
         } else {
-            map[byte] &= !(1 << bit);
+            unreachable!("MSR {:#x} Not supported by MSRPM", msr);
+        };
+
+        let base_offset      = (segment * 2048) as usize;
+
+        let byte_in_segment  = (msr_low as usize) / 4;
+        let bit_pair_offset  = ((msr_low & 0b11) * 2) as u8;      // 0,2,4,6
+        let bit_offset       = bit_pair_offset + is_write as u8;  // +0=读, +1=写
+
+        unsafe {
+            let byte_ptr = self
+                .frames
+                .as_mut_ptr()
+                .add(base_offset + byte_in_segment);
+
+            let old = core::ptr::read_volatile(byte_ptr);
+            let new = if intercept {
+                old | (1u8 << bit_offset)
+            } else {
+                old & !(1u8 << bit_offset)
+            };
+            core::ptr::write_volatile(byte_ptr, new);
         }
     }
+
+    pub fn set_read_intercept(&mut self, msr: u32, intercept: bool) {
+        self.set_intercept(msr, false, intercept);
+    }
+
+    pub fn set_write_intercept(&mut self, msr: u32, intercept: bool) {
+        self.set_intercept(msr, true, intercept);
+    }
+
 }

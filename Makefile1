@@ -35,7 +35,6 @@
 
 # General options
 ARCH ?= x86_64
-VENDOR  ?= intel
 PLATFORM ?=
 SMP ?= 1
 MODE ?= debug
@@ -54,15 +53,6 @@ APP_FEATURES ?=
 # make `FEATURES=page-alloc-64g` as the default configuration
 MEM_FEATURES ?= page-alloc-64g
 FEATURES += $(MEM_FEATURES)
-
-ifeq ($(ARCH),x86_64)
-  ifeq ($(VENDOR),amd)
-    APP_FEATURES += axvm/svm
-    else           
-    APP_FEATURES += axvm/vmx
-  endif
-endif
-
 
 # QEMU options
 BLK ?= y
