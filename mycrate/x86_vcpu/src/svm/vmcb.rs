@@ -278,7 +278,7 @@ impl<H: AxVCpuHal> VmcbFrame<H> {
     /// # Safety
     /// caller must guarantee the page is mapped
     pub unsafe fn as_vmcb<'a>(&'a self) -> Vmcb<'a> {
-        let base = self.phys_addr().as_usize() as *mut u8;
+        let base = self.as_mut_ptr();
 
         Vmcb {
             control: &mut *(base as *mut VmcbControlArea),

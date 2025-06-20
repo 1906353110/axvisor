@@ -29,6 +29,10 @@ impl<H: AxVCpuHal> VmcbFrame<H> {
     pub fn phys_addr(&self) -> HostPhysAddr {
         self.page.start_paddr()
     }
+
+    pub fn as_mut_ptr(&self) -> *mut u8 {
+        self.page.as_mut_ptr()
+    }
 }
 
 
@@ -63,6 +67,9 @@ impl<H: AxVCpuHal> IOPm<H> {
 
     pub fn phys_addr(&self) -> HostPhysAddr {
         self.frames.start_paddr()
+    }
+    pub fn as_mut_ptr(&self) -> *mut u8 {
+        self.frames.as_mut_ptr()
     }
 
     pub fn set_intercept(&mut self, port: u32, intercept: bool) {
@@ -111,6 +118,9 @@ impl<H: AxVCpuHal> MSRPm<H> {
 
     pub fn phys_addr(&self) -> HostPhysAddr {
         self.frames.start_paddr()
+    }
+    pub fn as_mut_ptr(&self) -> *mut u8 {
+        self.frames.as_mut_ptr()
     }
 
     pub fn set_intercept(&mut self, msr: u32, is_write: bool, intercept: bool) {

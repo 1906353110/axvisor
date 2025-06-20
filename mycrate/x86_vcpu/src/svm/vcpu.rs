@@ -143,6 +143,7 @@ pub struct SvmVcpu<H: AxVCpuHal> {
     xstate: XState,
     entry: Option<GuestPhysAddr>,
     npt_root: Option<HostPhysAddr>,
+
     // is_host: bool, temporary removed because we don't care about type 1.5 now
 }
 
@@ -231,9 +232,10 @@ impl<H: AxVCpuHal> SvmVcpu<H> {
         self.load_guest_xstate();
 
         unsafe {
-                self.launched = true;
-                self.svm_run();
+            self.svm_run();
+
         }
+
         self.load_host_xstate();
 
         // Handle vm-exits
@@ -355,13 +357,12 @@ impl<H: AxVCpuHal> SvmVcpu<H> {
         Ok(())
     }
 
-    fn setup_vmcb_host(&self) -> AxResult {
-        todo!()
-    }
 
     fn setup_vmcb_guest(&mut self, entry: GuestPhysAddr) -> AxResult {
+        info!("[AxVM] Setting up VMCB for guest at {:#x}", entry);
         let cr0_val: Cr0Flags =
             Cr0Flags::NOT_WRITE_THROUGH | Cr0Flags::CACHE_DISABLE | Cr0Flags::EXTENSION_TYPE;
+        info!("here??????????????????");
         self.set_cr(0, cr0_val.bits());
         self.set_cr(4, 0);
 
@@ -403,12 +404,6 @@ impl<H: AxVCpuHal> SvmVcpu<H> {
         st.sfmask.set(0);
         st.kernel_gs_base.set(Msr::IA32_KERNEL_GSBASE.read());
         st.rax.set(0);                      // hypervisor 返回值
-
-        // // ------------------------------------------------------------------
-        // // 3) Control area：这里只清 clean-bits；SVM 无需 VMX 的额外域
-        // // ------------------------------------------------------------------
-        // let ct = vmcb.control();
-        // ct.clean_bits.set(0);               // 强制 VMRUN 重新加载所有 save-area
 
         Ok(())
     }
@@ -472,6 +467,7 @@ impl<H: AxVCpuHal> SvmVcpu<H> {
 
     pub fn set_cr(&mut self, cr_idx: usize, val: u64) -> AxResult {
         let mut vmcb = unsafe { self.vmcb.as_vmcb() };
+        info!("here??????????????????");
 
         match cr_idx {
             0 => vmcb.state.cr0.set(val),
@@ -499,31 +495,80 @@ impl<H: AxVCpuHal> SvmVcpu<H> {
 
 impl<H: AxVCpuHal> SvmVcpu<H> {
 
+    //  unsafe extern "C" fn svm_run(&mut self) -> usize {
+    //     let vmcb_phy = self.vmcb.phys_addr().as_usize() as u64;
+    //
+    //      unsafe {
+    //         naked_asm!(
+    //             save_regs_to_stack!(),
+    //             // "clgi",                                // 清除中断，确保 SVM 运行不中断
+    //             "mov    [rdi + {host_stack_size}], rsp", // save current RSP to Vcpu::host_stack_top
+    //             "mov    rsp, rdi",                      // set RSP to guest regs area
+    //             restore_regs_from_stack!(),            // restore guest status
+    //             "mov rax,{vmcb}",
+    //             "vmload rax",
+    //             "vmrun rax",
+    //             "jmp {failed}",
+    //             host_stack_size = const size_of::<GeneralRegisters>(),
+    //             failed = sym Self::svm_entry_failed,
+    //             vmcb = in(reg) vmcb_phy,  // 正确绑定 vmcb 变量
+    //             // options(noreturn),
+    //         );
+    //     }
+    //      0
+    // }
 
-     unsafe extern "C" fn svm_run(&mut self) -> usize {
-        let vmcb_paddr = self.vmcb.phys_addr().as_usize() as u64;
-        let regs = self.regs_mut();
-        regs.rax = vmcb_paddr;
+    pub unsafe fn svm_run(&mut self) -> usize {
+        let vmcb = self.vmcb.phys_addr().as_usize() as u64;
+        let guest_regs = self.regs_mut();
+        core::arch::asm!(
+        "mov rdi, {0}",
+        "mov rax, {1}",
+        "call {entry}",
+        in(reg) guest_regs,
+        in(reg) vmcb,
+        entry = sym Self::svm_entry,
+        options(noreturn),
+        );
+    }
+
+    #[naked]
+    unsafe extern "C" fn svm_entry() -> ! {
+        naked_asm!(
+        save_regs_to_stack!(),
+        "mov [rdi + {host_stack_size}], rsp",
+        "mov rsp, rdi",
+        restore_regs_from_stack!(),
+        "vmload rax",
+        "vmrun rax",
+        "jmp {failed}",
+        host_stack_size = const size_of::<GeneralRegisters>(),
+        failed = sym Self::svm_entry_failed,
+    )
+    }
+
+
+
+    #[naked]
+    /// Return after vm-exit.
+    ///
+    /// The return value is a dummy value.
+    unsafe extern "C" fn svm_exit(&mut self) -> usize {
         unsafe {
-            asm!(
-                // "clgi",                                // 清除中断，确保 SVM 运行不中断
-                "mov rsp, {0}",                        // 切换到 VCPU 的栈
-                restore_regs_from_stack!(),            // 恢复通用寄存器
-                "vmload rax",                          // 加载 VMCB，rax=VMCB PA
-                "vmrun rax",
+            naked_asm!(
                 save_regs_to_stack!(),                  // save guest status
                 "mov    rsp, [rsp + {host_stack_top}]", // set RSP to Vcpu::host_stack_top
                 restore_regs_from_stack!(),             // restore host status
-                in(reg) regs as *const _ as usize,
+                "ret",
                 host_stack_top = const size_of::<GeneralRegisters>(),
-                options(noreturn),
             );
         }
-        0
+
     }
 
+
     fn svm_entry_failed() -> ! {
-        todo!()
+        panic!("svm_entry_failed");
     }
 
     fn allow_interrupt(&self) -> bool {
@@ -642,15 +687,16 @@ impl<H: AxVCpuHal> AxArchVCpu for SvmVcpu<H> {
 
 
     fn bind(&mut self) -> AxResult {
-        todo!()
+        self.bind_to_current_processor()
     }
 
     fn unbind(&mut self) -> AxResult {
-        todo!()
+        self.launched = false;
+        self.unbind_from_current_processor()
     }
 
     fn set_gpr(&mut self, reg: usize, val: usize) {
-        todo!()
+        self.regs_mut().set_reg_of_index(reg as u8, val as u64);
     }
 }
 

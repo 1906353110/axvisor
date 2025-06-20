@@ -20,13 +20,13 @@ phys_cpu_sets = [1]
 entry_point = 0x8000
 # The location of image: "memory" | "fs".
 # Load from file system.
-image_location = "fs"
+image_location = "memory"
 # The file path of the BIOS image.
-bios_path = "axvm-bios.bin"
+bios_path = "/home/yake/my2025/hypervisor/axvm-bios.bin"
 # The load address of the BIOS image.
 bios_load_addr = 0x8000
 # The file path of the kernel image.
-kernel_path = "arceos-x86_64.bin"
+kernel_path = "/home/yake/my2025/arceos/examples/helloworld/helloworld_x86_64-qemu-q35.bin"
 # The load address of the kernel image.
 kernel_load_addr = 0x20_0000
 
